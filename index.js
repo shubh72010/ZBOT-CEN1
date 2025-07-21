@@ -2,7 +2,7 @@ import { Client, GatewayIntentBits, Partials, Events, REST, Routes, SlashCommand
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 
 config();
 
@@ -38,7 +38,10 @@ const commands = [
       option.setName('key')
         .setDescription('Your Groq API key')
         .setRequired(true)
-    )
+    ),
+  new SlashCommandBuilder()
+    .setName('removekey')
+    .setDescription('Remove your saved Groq API key')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -60,9 +63,10 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  const guildId = interaction.guildId;
+
   if (interaction.commandName === 'setkey') {
     const apiKey = interaction.options.getString('key');
-    const guildId = interaction.guildId;
 
     try {
       await setDoc(doc(db, 'keys', guildId), {
@@ -74,6 +78,15 @@ client.on(Events.InteractionCreate, async interaction => {
     } catch (err) {
       console.error('🔥 Failed to save key:', err);
       await interaction.reply({ content: `❌ Failed to save key`, ephemeral: true });
+    }
+
+  } else if (interaction.commandName === 'removekey') {
+    try {
+      await deleteDoc(doc(db, 'keys', guildId));
+      await interaction.reply({ content: `🗑️ Your API key has been removed.`, ephemeral: true });
+    } catch (err) {
+      console.error('🔥 Failed to remove key:', err);
+      await interaction.reply({ content: `❌ Failed to remove key`, ephemeral: true });
     }
   }
 });
