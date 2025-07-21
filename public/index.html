@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Link Your Groq Key</title>
+</head>
+<body>
+  <h2>Paste your Groq API Key</h2>
+  <input type="text" id="groqKey" placeholder="sk-...">
+  <button onclick="submitKey()">Submit</button>
+
+  <script>
+    async function submitKey() {
+      const groqKey = document.getElementById("groqKey").value;
+      const res = await fetch("/submit-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groqKey }),
+      });
+      alert(await res.text());
+    }
+  </script>
+</body>
+</html>
