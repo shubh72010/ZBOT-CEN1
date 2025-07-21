@@ -1,68 +1,73 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import axios from 'axios';
-import { Client, GatewayIntentBits } from 'discord.js';
+const express = require("express");
+const path = require("path");
+const axios = require("axios");
+const { Client, GatewayIntentBits } = require("discord.js");
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.use(bodyParser.json());
 
-const guildKeys = {};
-
-// Web endpoint to receive key
-app.post('/api/store-key', (req, res) => {
-  const { apiKey, guildId } = req.body;
-  if (!apiKey || !guildId) {
-    return res.status(400).send('Missing apiKey or guildId');
-  }
-  guildKeys[guildId] = apiKey;
-  console.log(`[+] Stored Groq key for guild: ${guildId}`);
-  res.send({ success: true });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-// Discord bot setup
+// ====== Discord Bot Setup ======
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-client.login(process.env.DISCORD_TOKEN);
-
-client.once('ready', () => {
+client.once("ready", () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
-client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.guild) return;
+client.login(process.env.DISCORD_TOKEN);
 
-  const apiKey = guildKeys[message.guild.id];
-  if (!apiKey) {
-    return message.reply("❌ API key not set for this server. Ask admin to provide one.");
+// ====== Express Web Server Setup ======
+app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json());
+
+// ====== API: Chat with Groq ======
+app.post("/chat", async (req, res) => {
+  const { apiKey, message } = req.body;
+
+  if (!apiKey || !message) {
+    return res.status(400).json({ error: "API key and message are required." });
   }
 
   try {
     const response = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
+      "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama3-8b-8192",
-        messages: [{ role: "user", content: message.content }],
-        temperature: 0.7,
+        model: "mixtral-8x7b-32768",
+        messages: [
+          {
+            role: "user",
+            content: message
+          }
+        ]
       },
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
+          "Content-Type": "application/json"
+        }
       }
     );
 
-    const reply = response.data.choices[0].message.content.trim();
-    message.reply(reply.slice(0, 2000)); // Discord limit
+    const reply = response.data.choices?.[0]?.message?.content || "No response";
+    res.json({ reply });
+
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    message.reply("❌ Error talking to Groq.");
+    console.error("Groq API Error:", err.response?.data || err.message);
+    res.status(500).json({
+      error: "Failed to get response from Groq API.",
+      details: err.response?.data || err.message
+    });
   }
+});
+
+// ====== Catch-All Route ======
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/index.html"));
+});
+
+// ====== Start Server ======
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
