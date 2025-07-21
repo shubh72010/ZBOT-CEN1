@@ -1,24 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Link Your Groq Key</title>
-</head>
-<body>
-  <h2>Paste your Groq API Key</h2>
-  <input type="text" id="groqKey" placeholder="sk-...">
-  <button onclick="submitKey()">Submit</button>
+<html>
+  <head>
+    <title>Set API Key</title>
+  </head>
+  <body>
+    <h2>Configure Your Bot</h2>
+    <input id="guild" placeholder="Guild ID" />
+    <input id="key" placeholder="Groq API Key" />
+    <button onclick="submitKey()">Save</button>
 
-  <script>
-    async function submitKey() {
-      const groqKey = document.getElementById("groqKey").value;
-      const res = await fetch("/submit-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ groqKey }),
-      });
-      alert(await res.text());
-    }
-  </script>
-</body>
+    <script>
+      async function submitKey() {
+        const guildId = document.getElementById("guild").value;
+        const apiKey = document.getElementById("key").value;
+
+        await fetch("/auth/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ guildId, apiKey })
+        });
+
+        alert("Saved!");
+      }
+    </script>
+  </body>
 </html>
