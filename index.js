@@ -1,88 +1,98 @@
-import express from 'express';
-import { Client, GatewayIntentBits } from 'discord.js';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import fetch from 'node-fetch';
-
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import dotenv from 'dotenv';
 dotenv.config();
 
-// Discord bot setup
+// Firebase Config
+const firebaseConfig = {
+  apiKey: "AIzaSyAmD9lC7CGAn4zUgM59IAXXmVam3N8Vr1o",
+  authDomain: "zbots-90001.firebaseapp.com",
+  projectId: "zbots-90001",
+  storageBucket: "zbots-90001.appspot.com",
+  messagingSenderId: "517190005064",
+  appId: "1:517190005064:web:e849a5ec88a84b752d837d",
+  measurementId: "G-JXG10W9DN7"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// Discord Setup
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-const apiKeys = {}; // In-memory store: guildId -> apiKey (swap with DB later)
+const commands = [
+  new SlashCommandBuilder()
+    .setName('setkey')
+    .setDescription('Set your Groq API key')
+    .addStringOption(opt =>
+      opt.setName('key').setDescription('Your Groq API key').setRequired(true)
+    )
+].map(cmd => cmd.toJSON());
 
-client.once('ready', () => {
-  console.log(`🤖 Bot logged in as ${client.user.tag}`);
-});
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-// Listen to messages
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-
-  const guildId = message.guild?.id;
-  const key = apiKeys[guildId];
-
-  if (!key) {
-    message.reply('❌ No Groq API key set for this server yet.');
-    return;
-  }
+client.once('ready', async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
+    const guildId = process.env.GUILD_ID;
+    const clientId = client.user.id;
+    await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
+    console.log('📌 Slash commands registered.');
+  } catch (err) {
+    console.error('❌ Command registration error:', err);
+  }
+});
+
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'setkey') {
+    const userKey = interaction.options.getString('key');
+    const userId = interaction.user.id;
+
+    try {
+      await setDoc(doc(db, 'user_keys', userId), { key: userKey });
+      const last4 = userKey.slice(-4);
+      await interaction.reply(`✅ API key saved. Ends with: \`${last4}\``);
+    } catch (err) {
+      await interaction.reply('❌ Failed to save API key.');
+      console.error(err);
+    }
+  }
+});
+
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
+
+  try {
+    const docSnap = await getDoc(doc(db, 'user_keys', message.author.id));
+    if (!docSnap.exists()) return;
+
+    const userKey = docSnap.data().key;
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${userKey}`,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: 'llama3-8b-8192', // or your default
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant.' },
-          { role: 'user', content: message.content }
-        ],
-      }),
+        model: "llama3-8b-8192",
+        messages: [{ role: "user", content: message.content }]
+      })
     });
 
     const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content;
-
-    if (reply) {
-      message.reply(reply);
-    } else {
-      message.reply('❌ Groq did not return a response.');
-      console.error(data);
-    }
+    const reply = data.choices?.[0]?.message?.content ?? "❌ Error in response.";
+    message.reply(reply);
   } catch (err) {
     console.error(err);
-    message.reply('⚠️ Error calling Groq API.');
+    message.reply("❌ Something went wrong.");
   }
-});
-
-// Express setup
-const app = express();
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
-
-// Handle saving API key via POST
-app.post('/save-key', (req, res) => {
-  const { apiKey, guildId } = req.body;
-
-  if (!apiKey || !guildId) {
-    return res.status(400).send('Missing fields');
-  }
-
-  apiKeys[guildId] = apiKey;
-  console.log(`✅ Saved key for guild ${guildId}`);
-  res.send({ message: `Your Groq key ends with: ${apiKey.slice(-4)}` });
 });
 
 client.login(process.env.DISCORD_TOKEN);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🌐 Web server live at http://localhost:${PORT}`);
-});
