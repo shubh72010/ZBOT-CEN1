@@ -1,11 +1,12 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { config } from 'dotenv';
 import fetch from 'node-fetch';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
-import dotenv from 'dotenv';
-dotenv.config();
 
-// Firebase Config
+config();
+
+// Firebase Setup
 const firebaseConfig = {
   apiKey: "AIzaSyAmD9lC7CGAn4zUgM59IAXXmVam3N8Vr1o",
   authDomain: "zbots-90001.firebaseapp.com",
@@ -19,79 +20,102 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// Discord Setup
+// Discord Client Setup
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
 });
 
 const commands = [
   new SlashCommandBuilder()
     .setName('setkey')
     .setDescription('Set your Groq API key')
-    .addStringOption(opt =>
-      opt.setName('key').setDescription('Your Groq API key').setRequired(true)
+    .addStringOption(option =>
+      option.setName('key')
+        .setDescription('Your Groq API key')
+        .setRequired(true)
     )
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   try {
-    const guildId = process.env.GUILD_ID;
-    const clientId = client.user.id;
-    await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
-    console.log('📌 Slash commands registered.');
+    const guilds = await client.guilds.fetch();
+    for (const [guildId] of guilds) {
+      await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
+    }
+    console.log('✅ Slash commands registered.');
   } catch (err) {
-    console.error('❌ Command registration error:', err);
+    console.error('❌ Failed to register slash commands:', err);
   }
 });
 
-client.on('interactionCreate', async interaction => {
+client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'setkey') {
-    const userKey = interaction.options.getString('key');
-    const userId = interaction.user.id;
+    const apiKey = interaction.options.getString('key');
+    const guildId = interaction.guildId;
 
     try {
-      await setDoc(doc(db, 'user_keys', userId), { key: userKey });
-      const last4 = userKey.slice(-4);
-      await interaction.reply(`✅ API key saved. Ends with: \`${last4}\``);
+      await setDoc(doc(db, 'keys', guildId), {
+        apiKey
+      });
+
+      const last4 = apiKey.slice(-4);
+      await interaction.reply({ content: `✅ Saved your API key ending with \`${last4}\``, ephemeral: true });
     } catch (err) {
-      await interaction.reply('❌ Failed to save API key.');
-      console.error(err);
+      console.error('🔥 Failed to save key:', err);
+      await interaction.reply({ content: `❌ Failed to save key`, ephemeral: true });
     }
   }
 });
 
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot || !message.guild) return;
+
+  const guildId = message.guild.id;
+  const keyDoc = await getDoc(doc(db, 'keys', guildId));
+
+  if (!keyDoc.exists()) return;
+
+  const userKey = keyDoc.data().apiKey;
+  const userMessage = message.content;
 
   try {
-    const docSnap = await getDoc(doc(db, 'user_keys', message.author.id));
-    if (!docSnap.exists()) return;
-
-    const userKey = docSnap.data().key;
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Authorization": `Bearer ${userKey}`,
-        "Content-Type": "application/json"
+        'Authorization': `Bearer ${userKey}`,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "llama3-8b-8192",
-        messages: [{ role: "user", content: message.content }]
+        model: 'llama3-8b-8192',
+        messages: [
+          { role: 'system', content: 'You are a helpful Discord bot.' },
+          { role: 'user', content: userMessage }
+        ]
       })
     });
 
     const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content ?? "❌ Error in response.";
-    message.reply(reply);
+
+    const reply = data?.choices?.[0]?.message?.content;
+    if (reply) {
+      await message.reply(reply);
+    } else {
+      await message.reply('⚠️ No response from model.');
+    }
   } catch (err) {
-    console.error(err);
-    message.reply("❌ Something went wrong.");
+    console.error('🔥 Error fetching from Groq:', err);
+    await message.reply('❌ Error generating response.');
   }
 });
 
