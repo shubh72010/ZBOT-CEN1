@@ -1,17 +1,15 @@
-const { Client, GatewayIntentBits } = require('discord.js');
-const express = require('express');
-const bodyParser = require('body-parser');
-const axios = require('axios');
+import express from 'express';
+import bodyParser from 'body-parser';
+import axios from 'axios';
+import { Client, GatewayIntentBits } from 'discord.js';
 
 const app = express();
+const PORT = process.env.PORT || 10000;
 app.use(bodyParser.json());
 
-const PORT = process.env.PORT || 10000;
-
-// Store API keys per guild
 const guildKeys = {};
 
-// EXPRESS ENDPOINT - to receive API key + guild ID from frontend
+// Web endpoint to receive key
 app.post('/api/store-key', (req, res) => {
   const { apiKey, guildId } = req.body;
   if (!apiKey || !guildId) {
@@ -26,12 +24,12 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+// Discord bot setup
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// Bot login
-client.login('YOUR_DISCORD_BOT_TOKEN');
+client.login(process.env.DISCORD_TOKEN);
 
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
@@ -42,17 +40,15 @@ client.on('messageCreate', async (message) => {
 
   const apiKey = guildKeys[message.guild.id];
   if (!apiKey) {
-    return message.reply("❌ API key not set for this server. Ask admin to provide one via the web panel.");
+    return message.reply("❌ API key not set for this server. Ask admin to provide one.");
   }
 
-  // Make a request to Groq API (LLaMA 3)
   try {
-    const userInput = message.content;
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
-        model: "llama3-8b-8192",  // Assuming pre-selected
-        messages: [{ role: "user", content: userInput }],
+        model: "llama3-8b-8192",
+        messages: [{ role: "user", content: message.content }],
         temperature: 0.7,
       },
       {
@@ -63,15 +59,10 @@ client.on('messageCreate', async (message) => {
       }
     );
 
-    const botReply = response.data.choices[0].message.content.trim();
-    if (botReply) {
-      message.reply(botReply.slice(0, 2000)); // Discord limit
-    } else {
-      message.reply("⚠️ No response from model.");
-    }
-
+    const reply = response.data.choices[0].message.content.trim();
+    message.reply(reply.slice(0, 2000)); // Discord limit
   } catch (err) {
-    console.error("Groq API error:", err?.response?.data || err.message);
-    message.reply("❌ Error while calling Groq API.");
+    console.error(err.response?.data || err.message);
+    message.reply("❌ Error talking to Groq.");
   }
 });
