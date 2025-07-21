@@ -120,3 +120,16 @@ client.on(Events.MessageCreate, async message => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
+import express from 'express';
+
+const app = express();
+const PORT = process.env.PORT || 3000; // Replit, Render, Railway use PORT env var
+
+app.get('/', (req, res) => {
+  res.send('👋 Bot is alive and running.');
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Web server running on port ${PORT}`);
+});
