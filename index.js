@@ -22,20 +22,26 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// Utility: Encryption
-const encryptKey = (key) => {
-  const cipher = crypto.createCipher('aes-256-cbc', process.env.ENCRYPTION_SECRET);
-  let encrypted = cipher.update(key, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return encrypted;
-};
+// Utility: AES-256-CBC Key Encryption (Node v20+ safe)
+const algorithm = 'aes-256-cbc';
+const ivLength = 16;
+const key = crypto.createHash('sha256').update(String(process.env.ENCRYPTION_SECRET)).digest();
 
-const decryptKey = (encrypted) => {
-  const decipher = crypto.createDecipher('aes-256-cbc', process.env.ENCRYPTION_SECRET);
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-};
+function encryptKey(text) {
+  const iv = crypto.randomBytes(ivLength);
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decryptKey(encryptedText) {
+  const [ivHex, encryptedHex] = encryptedText.split(':');
+  const iv = Buffer.from(ivHex, 'hex');
+  const encrypted = Buffer.from(encryptedHex, 'hex');
+  const decipher = crypto.createDecipheriv(algorithm, key, iv);
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  return decrypted.toString('utf8');
+}
 
 // Discord Client Setup
 const client = new Client({
