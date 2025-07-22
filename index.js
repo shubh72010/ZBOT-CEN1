@@ -1,39 +1,56 @@
 import { Client, GatewayIntentBits, Partials, Events, REST, Routes, SlashCommandBuilder } from 'discord.js';
-import { config } from 'dotenv';
-import fetch from 'node-fetch';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
 
-config();
+dotenv.config();
 
-// Firebase Setup
+// Firebase setup
 const firebaseConfig = {
-  apiKey: "AIzaSyAmD9lC7CGAn4zUgM59IAXXmVam3N8Vr1o",
-  authDomain: "zbots-90001.firebaseapp.com",
-  projectId: "zbots-90001",
-  storageBucket: "zbots-90001.appspot.com",
-  messagingSenderId: "517190005064",
-  appId: "1:517190005064:web:e849a5ec88a84b752d837d",
-  measurementId: "G-JXG10W9DN7"
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.FIREBASE_APP_ID,
 };
 
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-// Discord Client Setup
+// Encryption setup
+const ALGO = 'aes-256-cbc';
+const ENC_KEY = crypto.createHash('sha256').update(process.env.ENCRYPTION_SECRET).digest(); // 32 bytes key
+const IV_LENGTH = 16;
+
+function encrypt(text) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGO, ENC_KEY, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(encryptedText) {
+  const [ivHex, encrypted] = encryptedText.split(':');
+  const iv = Buffer.from(ivHex, 'hex');
+  const decipher = crypto.createDecipheriv(ALGO, ENC_KEY, iv);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+// Discord setup
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  partials: [Partials.Channel],
 });
 
 const commands = [
   new SlashCommandBuilder()
     .setName('setkey')
-    .setDescription('Set your Groq API key')
+    .setDescription('Store your Groq API key securely')
     .addStringOption(option =>
       option.setName('key')
         .setDescription('Your Groq API key')
@@ -41,108 +58,74 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('removekey')
-    .setDescription('Remove your saved Groq API key')
-].map(cmd => cmd.toJSON());
+    .setDescription('Remove your stored Groq API key'),
+];
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
+(async () => {
   try {
-    const guilds = await client.guilds.fetch();
-    for (const [guildId] of guilds) {
-      await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
-    }
-    console.log('✅ Slash commands registered.');
+    console.log('Registering slash commands...');
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+    console.log('Slash commands registered');
   } catch (err) {
-    console.error('❌ Failed to register slash commands:', err);
+    console.error(err);
   }
-});
+})();
 
+// Handle slash commands
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const command = interaction.commandName;
 
-  if (interaction.commandName === 'setkey') {
-    const apiKey = interaction.options.getString('key');
-
+  if (command === 'setkey') {
+    const key = interaction.options.getString('key');
     try {
-      await setDoc(doc(db, 'keys', guildId), {
-        apiKey
-      });
-
-      const last4 = apiKey.slice(-4);
-      await interaction.reply({ content: `✅ Saved your API key ending with \`${last4}\``, ephemeral: true });
+      const encryptedKey = encrypt(key);
+      const userDoc = doc(db, 'keys', userId);
+      await setDoc(userDoc, { apiKey: encryptedKey });
+      await interaction.reply({ content: '✅ Your API key has been securely stored.', ephemeral: true });
     } catch (err) {
-      console.error('🔥 Failed to save key:', err);
-      await interaction.reply({ content: `❌ Failed to save key`, ephemeral: true });
+      console.error(err);
+      await interaction.reply({ content: '❌ Failed to store key. Try again later.', ephemeral: true });
     }
+  }
 
-  } else if (interaction.commandName === 'removekey') {
+  if (command === 'removekey') {
     try {
-      await deleteDoc(doc(db, 'keys', guildId));
-      await interaction.reply({ content: `🗑️ Your API key has been removed.`, ephemeral: true });
+      const userDoc = doc(db, 'keys', userId);
+      await deleteDoc(userDoc);
+      await interaction.reply({ content: '🗑️ Your API key has been removed.', ephemeral: true });
     } catch (err) {
-      console.error('🔥 Failed to remove key:', err);
-      await interaction.reply({ content: `❌ Failed to remove key`, ephemeral: true });
+      console.error(err);
+      await interaction.reply({ content: '❌ Failed to remove key.', ephemeral: true });
     }
   }
 });
 
+// Respond only to pings
 client.on(Events.MessageCreate, async message => {
-  if (message.author.bot || !message.guild) return;
+  if (message.author.bot || !message.mentions.has(client.user)) return;
 
-  const guildId = message.guild.id;
-  const keyDoc = await getDoc(doc(db, 'keys', guildId));
+  const userId = message.author.id;
+  const userDoc = doc(db, 'keys', userId);
+  const docSnap = await getDoc(userDoc);
 
-  if (!keyDoc.exists()) return;
-
-  const userKey = keyDoc.data().apiKey;
-  const userMessage = message.content;
-
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${userKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama3-8b-8192',
-        messages: [
-          { role: 'system', content: 'You are a helpful Discord bot.' },
-          { role: 'user', content: userMessage }
-        ]
-      })
-    });
-
-    const data = await res.json();
-
-    const reply = data?.choices?.[0]?.message?.content;
-    if (reply) {
-      await message.reply(reply);
-    } else {
-      await message.reply('⚠️ No response from model.');
-    }
-  } catch (err) {
-    console.error('🔥 Error fetching from Groq:', err);
-    await message.reply('❌ Error generating response.');
+  if (!docSnap.exists()) {
+    return message.reply('🔑 You need to set your API key first using `/setkey`.');
   }
+
+  const encryptedKey = docSnap.data().apiKey;
+  const apiKey = decrypt(encryptedKey);
+
+  // Here you'd add your actual API logic using the key
+  return message.reply(`Hey <@${userId}>, I received your ping! (Key decrypted & ready to use ✅)`);
+});
+
+client.once(Events.ClientReady, () => {
+  console.log(`✅ Bot is online as ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
-
-import express from 'express';
-
-const app = express();
-const PORT = process.env.PORT || 3000; // Replit, Render, Railway use PORT env var
-
-app.get('/', (req, res) => {
-  res.send('👋 Bot is alive and running.');
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Web server running on port ${PORT}`);
-});
