@@ -1,104 +1,170 @@
-import { Client, GatewayIntentBits, REST, Routes, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { config } from 'dotenv';
+import fetch from 'node-fetch';
+import crypto from 'crypto';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import express from 'express';
-import crypto from 'crypto';
-import 'dotenv/config';
 
-// --- Firebase Setup ---
+config();
+
+// Firebase Setup
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID
+  apiKey: "AIzaSyAmD9lC7CGAn4zUgM59IAXXmVam3N8Vr1o",
+  authDomain: "zbots-90001.firebaseapp.com",
+  projectId: "zbots-90001",
+  storageBucket: "zbots-90001.appspot.com",
+  messagingSenderId: "517190005064",
+  appId: "1:517190005064:web:e849a5ec88a84b752d837d",
+  measurementId: "G-JXG10W9DN7"
 };
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// --- Discord Bot Setup ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
-
-const commands = [
-  {
-    name: 'removekey',
-    description: 'Remove your API key from the bot’s database.'
-  }
-];
-
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
-
-// --- Register Slash Commands ---
-(async () => {
-  try {
-    await rest.put(
-      Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
-      { body: commands }
-    );
-    console.log('✅ Slash commands registered');
-  } catch (err) {
-    console.error('❌ Error registering commands:', err);
-  }
-})();
-
-// --- Utility: Key encryption ---
-function encryptKey(key) {
+// Utility: Encryption
+const encryptKey = (key) => {
   const cipher = crypto.createCipher('aes-256-cbc', process.env.ENCRYPTION_SECRET);
   let encrypted = cipher.update(key, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   return encrypted;
-}
+};
 
-// --- Utility: Decrypt key (not used yet but good to have) ---
-function decryptKey(encrypted) {
+const decryptKey = (encrypted) => {
   const decipher = crypto.createDecipher('aes-256-cbc', process.env.ENCRYPTION_SECRET);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
-}
+};
 
-// --- Bot Logic: Respond only to mentions ---
-client.on(Events.MessageCreate, async message => {
-  if (message.author.bot) return;
-
-  const botWasMentioned = message.mentions.has(client.user);
-  if (!botWasMentioned) return;
-
-  await message.reply('👋 I only respond to mentions and slash commands!');
+// Discord Client Setup
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
 });
 
-// --- Slash Command: /removekey ---
+const commands = [
+  new SlashCommandBuilder()
+    .setName('setkey')
+    .setDescription('Set your Groq API key')
+    .addStringOption(option =>
+      option.setName('key')
+        .setDescription('Your Groq API key')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('removekey')
+    .setDescription('Remove your saved Groq API key')
+].map(cmd => cmd.toJSON());
+
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  try {
+    const guilds = await client.guilds.fetch();
+    for (const [guildId] of guilds) {
+      await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
+    }
+    console.log('✅ Slash commands registered.');
+  } catch (err) {
+    console.error('❌ Failed to register slash commands:', err);
+  }
+});
+
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  const userId = interaction.user.id;
+  const guildId = interaction.guildId;
 
-  if (interaction.commandName === 'removekey') {
+  if (interaction.commandName === 'setkey') {
+    const apiKey = interaction.options.getString('key');
+    const encrypted = encryptKey(apiKey);
+
     try {
-      const docRef = doc(db, 'userKeys', userId);
-      const docSnap = await getDoc(docRef);
+      await setDoc(doc(db, 'keys', guildId), { apiKey: encrypted });
 
-      if (!docSnap.exists()) {
-        await interaction.reply({ content: '❌ No key found to remove.', ephemeral: true });
-        return;
-      }
-
-      await deleteDoc(docRef);
-      await interaction.reply({ content: '✅ Your key has been removed.', ephemeral: true });
+      const last4 = apiKey.slice(-4);
+      await interaction.reply({ content: `✅ Saved your API key ending with \`${last4}\``, ephemeral: true });
     } catch (err) {
-      console.error('❌ Error removing key:', err);
-      await interaction.reply({ content: '⚠️ Something went wrong while removing your key.', ephemeral: true });
+      console.error('🔥 Failed to save key:', err);
+      await interaction.reply({ content: `❌ Failed to save key`, ephemeral: true });
+    }
+
+  } else if (interaction.commandName === 'removekey') {
+    try {
+      await deleteDoc(doc(db, 'keys', guildId));
+      await interaction.reply({ content: `🗑️ Your API key has been removed.`, ephemeral: true });
+    } catch (err) {
+      console.error('🔥 Failed to remove key:', err);
+      await interaction.reply({ content: `❌ Failed to remove key`, ephemeral: true });
     }
   }
 });
 
-// --- Keep Port Open: Web Server ---
-const app = express();
-app.get('/', (req, res) => res.send('ZBØT is alive and breathing.'));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Port open at http://localhost:${PORT}`));
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot || !message.guild) return;
 
-// --- Login Bot ---
-client.login(process.env.DISCORD_BOT_TOKEN);
+  const botMentioned = message.mentions.has(client.user);
+  if (!botMentioned) return;
+
+  const guildId = message.guild.id;
+  const keyDoc = await getDoc(doc(db, 'keys', guildId));
+
+  if (!keyDoc.exists()) {
+    await message.reply('❌ No API key set. Use `/setkey` to add your Groq key.');
+    return;
+  }
+
+  const encryptedKey = keyDoc.data().apiKey;
+  const apiKey = decryptKey(encryptedKey);
+  const userMessage = message.content.replace(`<@${client.user.id}>`, '').trim();
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama3-8b-8192',
+        messages: [
+          { role: 'system', content: 'You are a helpful Discord bot.' },
+          { role: 'user', content: userMessage }
+        ]
+      })
+    });
+
+    const data = await res.json();
+    const reply = data?.choices?.[0]?.message?.content;
+
+    if (reply) {
+      await message.reply(reply);
+    } else {
+      await message.reply('⚠️ No response from model.');
+    }
+  } catch (err) {
+    console.error('🔥 Error fetching from Groq:', err);
+    await message.reply('❌ Error generating response.');
+  }
+});
+
+// Express to keep port open on Render
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('👋 ZBØT is alive and running.');
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Web server running on port ${PORT}`);
+});
+
+client.login(process.env.DISCORD_TOKEN);
